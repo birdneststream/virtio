@@ -312,8 +312,16 @@ virtio_pool_wait_armed (struct virtio_slot_pool *p, struct virtio_queue *q,
           pthread_mutex_lock (&p->lock);
           virtio_pool_reap_locked_impl (p, q);
           werr = virtio_pool_wait_collect (p, slot, used, observed_seq);
+          if (werr == EAGAIN)
+            {
+              /* A timeout is terminal too: give up the armed waiter,
+                 so that the late completion releases the slot instead
+                 of keeping it as a result nobody collects.  */
+              p->slot_waiters[slot]--;
+              werr = ETIMEDOUT;
+            }
           pthread_mutex_unlock (&p->lock);
-          return werr == EAGAIN ? ETIMEDOUT : werr;
+          return werr;
         }
     }
 }

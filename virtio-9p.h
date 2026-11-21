@@ -52,6 +52,8 @@ struct v9p_dma {
 
 extern struct virtio_pci_dev v9p_pci;
 extern struct virtio_queue v9p_q;
+/* True when the device and driver negotiated VIRTIO_RING_F_EVENT_IDX.  */
+extern int v9p_event_idx;
 extern struct virtio_irq v9p_irq;
 extern struct v9p_dma v9p_dma;
 extern char v9p_tag[V9P_MAX_TAG_LEN + 1];

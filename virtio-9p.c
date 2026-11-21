@@ -335,6 +335,7 @@ struct virtio_pci_dev v9p_pci =
   .device_id = V9P_DEVICE_VIRTIO_9P,
 };
 struct virtio_queue v9p_q;
+int v9p_event_idx;
 struct virtio_irq v9p_irq;
 struct v9p_dma v9p_dma;
 char v9p_tag[V9P_MAX_TAG_LEN + 1];
@@ -364,8 +365,14 @@ v9p_pci_init (void)
       fprintf (stderr, "virtio-9p: device does not offer VIRTIO_9P_MOUNT_TAG\n");
       return ENODEV;
     }
-  /* Writing guest_features = 0 would leave the mount tag undefined.  */
-  virtio_pci_set_guest_features (&v9p_pci, 1u << V9P_F_MOUNT_TAG);
+  /* Writing guest_features = 0 would leave the mount tag undefined.
+   * EVENT_IDX is accepted so the completion interrupt can be moderated:
+   * the exchange suppresses it for its spin window and arms the used
+   * event only when it must sleep.  */
+  v9p_event_idx = (features & (1u << VIRTIO_RING_F_EVENT_IDX)) != 0;
+  virtio_pci_set_guest_features (&v9p_pci, (1u << V9P_F_MOUNT_TAG)
+                                 | (v9p_event_idx
+                                    ? (1u << VIRTIO_RING_F_EVENT_IDX) : 0));
 
   v9p_tag_len = virtio_pci_inw (&v9p_pci, VIRTIO_PCI_CONFIG);
   if (v9p_tag_len == 0 || v9p_tag_len > V9P_MAX_TAG_LEN)
@@ -392,6 +399,7 @@ v9p_queue_setup (void)
   error_t err;
 
   err = virtio_queue_setup (&v9p_pci, &v9p_q, 0);
+  virtio_queue_set_event_idx (&v9p_q, v9p_event_idx);
   if (err)
     return err;
 

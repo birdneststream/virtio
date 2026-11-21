@@ -96,32 +96,31 @@ v9p_exchange (const void *pdu, uint32_t pdu_len,
   {
     uint16_t token = virtio_queue_enable_used_cb_prepare (&v9p_q);
 
-      if (!virtio_queue_poll_used (&v9p_q, token))
-        {
-          err = virtio_queue_wait_progress (&v9p_q, token,
-                                            V9P_EXCHANGE_TIMEOUT);
-          if (err == ETIMEDOUT)
-            {
-              fprintf (stderr, "virtio-9p: reply wait timed out\n");
-              return err;
-            }
-          if (err)
-            {
-              fprintf (stderr, "virtio-9p: reply wait failed: %s\n",
-                       strerror (err));
-              return err;
-            }
-        }
-      /* Progress was observed, so with this driver as the queue's only
-       * consumer the entry must be collectable now.  A miss is an
-       * invariant violation, not something to retry through.  */
-      err = virtio_queue_try_pop_used (&v9p_q, &used);
-      if (err == EAGAIN)
-        {
-          fprintf (stderr, "virtio-9p: completion vanished after progress\n");
-          return EIO;
-        }
-    }
+    if (!virtio_queue_poll_used (&v9p_q, token))
+      {
+        err = virtio_queue_wait_progress (&v9p_q, token,
+                                          V9P_EXCHANGE_TIMEOUT);
+        if (err == ETIMEDOUT)
+          {
+            fprintf (stderr, "virtio-9p: reply wait timed out\n");
+            return err;
+          }
+        if (err)
+          {
+            fprintf (stderr, "virtio-9p: reply wait failed: %s\n",
+                     strerror (err));
+            return err;
+          }
+      }
+    /* Progress was observed, so with this driver as the queue's only
+     * consumer the entry must be collectable now.  A miss is an
+     * invariant violation, not something to retry through.  */
+    err = virtio_queue_try_pop_used (&v9p_q, &used);
+    if (err == EAGAIN)
+      {
+        fprintf (stderr, "virtio-9p: completion vanished after progress\n");
+        return EIO;
+      }
   }
 
 got_reply:

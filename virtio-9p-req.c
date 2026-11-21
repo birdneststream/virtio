@@ -46,8 +46,9 @@ get_le32 (const void *p)
 
 /* One request: the complete outbound PDU in TX, reply capacity in RX.  The
    reply lands in REPLY (up to REPLY_CAP bytes) and its length in REPLY_LEN.
-   Submits the request, then blocks on the interrupt; the timeout is the
-   fallback for a lost interrupt, not the normal path.  */
+   Submits the request, then tries one inline pop of the reply before
+   falling back to the armed interrupt wait; the timeout is the fallback
+   for a lost interrupt, not the normal path.  */
 error_t
 v9p_exchange (const void *pdu, uint32_t pdu_len,
               void *reply, uint32_t reply_cap, uint32_t *reply_len)
@@ -71,10 +72,65 @@ v9p_exchange (const void *pdu, uint32_t pdu_len,
   bufs[1].len = reply_cap;
   bufs[1].flags = VIRTQ_DESC_F_WRITE;
 
+  /* The emulated device completes in microseconds, while the interrupt
+   * path costs a VM exit, an irqhelp thread wake and a condvar handoff
+   * before the waiter sees the entry.  With EVENT_IDX negotiated the
+   * completion interrupt is suppressed, one inline pop usually collects
+   * the reply, and the blocking fallback arms the used event first so
+   * the wake is exactly the next completion.  */
+  virtio_queue_disable_used_cb (&v9p_q);
+
   err = virtio_queue_post (&v9p_q, bufs, 2);
   if (err)
     return err;
-  err = virtio_queue_wait_used (&v9p_q, V9P_EXCHANGE_TIMEOUT, &used);
+
+  /* Under the emulated device the completion is usually already in the
+   * used ring when the kick's exit returns, so one opportunistic pop
+   * catches the common case without any spinning.  */
+  err = virtio_queue_try_pop_used (&v9p_q, &used);
+  if (err != EAGAIN)
+    goto got_reply;
+
+  /* Not collected inline: arm the used event at the consumed position,
+   * close the arm race, then sleep until the used index moves.  */
+  {
+    uint16_t token = virtio_queue_enable_used_cb_prepare (&v9p_q);
+
+      if (!virtio_queue_poll_used (&v9p_q, token))
+        {
+          err = virtio_queue_wait_progress (&v9p_q, token,
+                                            V9P_EXCHANGE_TIMEOUT);
+          if (err == ETIMEDOUT)
+            {
+              fprintf (stderr, "virtio-9p: reply wait timed out\n");
+              return err;
+            }
+          if (err)
+            {
+              fprintf (stderr, "virtio-9p: reply wait failed: %s\n",
+                       strerror (err));
+              return err;
+            }
+        }
+      /* Progress was observed, so with this driver as the queue's only
+       * consumer the entry must be collectable now.  A miss is an
+       * invariant violation, not something to retry through.  */
+      err = virtio_queue_try_pop_used (&v9p_q, &used);
+      if (err == EAGAIN)
+        {
+          fprintf (stderr, "virtio-9p: completion vanished after progress\n");
+          return EIO;
+        }
+    }
+  }
+
+got_reply:
+  if (err)
+    {
+      fprintf (stderr, "virtio-9p: reply completion failed: %s\n",
+               strerror (err));
+      return err;
+    }
   if (err)
     {
       fprintf (stderr, "virtio-9p: reply wait failed: %s\n", strerror (err));

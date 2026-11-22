@@ -169,8 +169,29 @@ error_t vblk_status (const char *override);
 
 /* virtio-blk-serve.c: MIG device server / trivfs translator.
    Brings up no device itself: DEV must be initialized already.  Never
-   returns; exits when trivfs_goaway tears the translator down.  */
-void vblk_serve (struct vblk_dev *dev, const char *name);
+   returns; exits when trivfs_goaway tears the translator down.
+
+   Weak so the static build (linked with libmachdev instead of this
+   translator) resolves the symbol to absent; virtio-blk.c checks it
+   before falling back from the machdev path.  */
+void vblk_serve (struct vblk_dev *dev, const char *name)
+  __attribute__ ((weak));
+
+/* virtio-blk-machdev.c: libmachdev bootstrap/translator entry, linked
+   only into the static build (see virtio-blk-machdev.c).  Weak in
+   every build: virtio-blk.c tests it at run time to pick the machdev
+   path over vblk_serve.  Brings DEV up itself (DEVICE is the --device
+   override, or NULL) after machdev_trivfs_init has resolved the
+   privileged ports: PCI access needs a device master that serves the
+   "pci" device, which the grub-supplied kernel port does not.
+   NEXT_TASK != MACH_PORT_NULL bootstraps the next task in the chain,
+   MACH_PORT_NULL is plain translator mode.  NAME restricts the
+   accepted device_open names (NULL: the built-in set).  Never
+   returns.  */
+void vblk_machdev_run (struct vblk_dev *dev, mach_port_t next_task,
+                       const char *name, const char *device,
+                       int argc, char **argv)
+  __attribute__ ((weak));
 
 /* virtio-blk-dev.c */
 error_t vblk_dev_init (struct vblk_dev *, const char *override);
@@ -208,7 +229,7 @@ error_t vblk_hurd_set_status (struct vblk_hurd *, dev_flavor_t flavor,
 error_t vblk_hurd_read_inband (struct vblk_hurd *, int mode, recnum_t recnum,
                                int bytes_wanted, io_buf_ptr_inband_t data);
 error_t vblk_hurd_write_inband (struct vblk_hurd *, int mode,
-                                recnum_t recnum, io_buf_ptr_inband_t data,
+                                recnum_t recnum, const char *data,
                                 int bytes, int *bytes_written);
 error_t vblk_hurd_map (struct vblk_hurd *, vm_prot_t prot, vm_offset_t offset,
                        vm_size_t size, memory_object_t *pager, int unmap);

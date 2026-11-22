@@ -30,9 +30,12 @@ OBJSBAL = virtio-balloon.o virtio-balloon-dev.o virtio-balloon-mem.o \
           $(TRANSPORT)
 # The shared slot-pool engine (virtio-pool.c) and the shared translator
 # scaffold (virtio-serve.c) are linked by blk and net.
+# The machdev adapter object is only built for the static link (see
+# virtio-blk-machdev.c); the toolchain invokes `make virtio-blk-machdev.o'.
 OBJSBLK = virtio-blk.o virtio-blk-dev.o virtio-blk-req.o virtio-blk-hurd.o \
           virtio-blk-serve.o deviceServer.o notifyServer.o virtio-pool.o \
           virtio-serve.o $(TRANSPORT)
+OBJSBLK_STATIC_EXTRA = virtio-blk-machdev.o
 # virtio-net links the trivfs/ports stack too: the binary doubles as the
 # Mach device translator (`--serve`), and it compiles in the pinned Hurd
 # tree's libbpf (bpf_impl.c + queue.c) for real filter evaluation, the
@@ -187,7 +190,8 @@ virtio-blk-serve.o: device_S.h notify_S.h
 virtio-serve.o: virtio-serve.h
 
 clean:
-	rm -f $(OBJS9P) $(OBJSBAL) $(OBJSBLK) $(OBJSNET) virtio-pool.o virtio-9p \
+	rm -f $(OBJS9P) $(OBJSBAL) $(OBJSBLK) $(OBJSBLK_STATIC_EXTRA) \
+	    $(OBJSNET) virtio-pool.o virtio-9p \
 	    virtio-balloon virtio-blk vblk-client vblk-client.o virtio-net \
 	    vnet-client vnet-client.o \
 	    device.sdefsi* deviceServer.c device_S.h notify.sdefsi* \

@@ -16,6 +16,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <hurd.h>          /* _hurd_host_priv, _hurd_device_master */
+#include <mach.h>          /* mach_print: kernel console before stdio */
+
 #include "virtio-blk.h"
 
 const char *argp_program_version = "virtio-blk 0.1";
@@ -28,7 +31,10 @@ enum {
   OPT_WRITE_TEST,
   OPT_READ_RANGE,
   OPT_SERVE,
-  OPT_NAME
+  OPT_NAME,
+  OPT_HOST_PRIV,
+  OPT_DEV_MASTER,
+  OPT_NEXT_TASK
 };
 
 static const char *opt_device;
@@ -38,6 +44,13 @@ static int opt_write_test;
 static const char *opt_read_range;
 static int opt_serve;
 static const char *opt_name;
+
+/* Bootstrap-chain arguments (rumpdisk's -h/-d/-N shape).  The kernel
+   bootstrap writes the port/task names as decimal task-local port
+   numbers on the module command line.  */
+static int opt_host_priv;
+static int opt_dev_master;
+static int opt_next_task;
 
 static const struct argp_option options[] =
 {
@@ -62,6 +75,14 @@ static const struct argp_option options[] =
   {"name", OPT_NAME, "NAME", 0,
    "With --serve: only accept device_open for this name (default: accept "
    "any, including the empty rest of libstore's `@node:' form)"},
+  {"host-priv-port", OPT_HOST_PRIV, "PORT", 0,
+   "Host privileged port PORT (bootstrap; stored for compatibility, the "
+   "libmachdev bootstrap fetches fresh ones via fsys_getpriv)"},
+  {"device-master-port", OPT_DEV_MASTER, "PORT", 0,
+   "Device master port PORT (bootstrap; see --host-priv-port)"},
+  {"next-task", OPT_NEXT_TASK, "TASK", 0,
+   "Resume TASK as the next bootstrap task after bringing the disk up "
+   "(bootstrap mode: serve as the root disk server)"},
   {"verbose", 'v', 0, 0,
    "Log every request posting and completion"},
   {0}
@@ -96,6 +117,19 @@ parse_opt (int key, char *arg, struct argp_state *state)
     case OPT_NAME:
       opt_name = arg;
       break;
+    case OPT_HOST_PRIV:
+      opt_host_priv = atoi (arg);
+      break;
+    case OPT_DEV_MASTER:
+      opt_dev_master = atoi (arg);
+      break;
+    case OPT_NEXT_TASK:
+      opt_next_task = atoi (arg);
+      break;
+    case ARGP_KEY_ARG:
+      argp_error (state, "unexpected argument '%s' (translator mode is "
+                  "--serve)", arg);
+      return EINVAL;
     default:
       return ARGP_ERR_UNKNOWN;
     }
@@ -107,7 +141,8 @@ static const struct argp argp =
 {
   options, parse_opt,
   "[--device=SLOT] [--selftest [--write-test]] [--status] "
-  "[--read-range=SECTOR[:COUNT]] [--verbose]",
+  "[--read-range=SECTOR[:COUNT]] [--verbose] | bootstrap: "
+  "--next-task=TASK [--host-priv-port=PORT --device-master-port=PORT]",
   "Virtio block driver: raw block I/O on QEMU's virtio-blk PCI device "
   "(0x1af4:0x1001), with the Mach device semantics layer and a Mach "
   "device translator mode for Hurd storage consumers"
@@ -554,14 +589,49 @@ main (int argc, char **argv)
   error_t err;
   struct sigaction sa;
   uint32_t seq = 0;
+  mach_port_t next_task;
 
   argp_parse (&argp, argc, argv, 0, 0, 0);
 
   if (opt_write_test && !opt_selftest)
     error (1, 0, "--write-test only applies to --selftest");
 
-  if (opt_name && !opt_serve)
+  if (opt_name && !opt_serve && !opt_next_task)
     error (1, 0, "--name only applies to --serve");
+
+  if (opt_next_task && (opt_selftest || opt_status || opt_read_range
+                        || opt_serve))
+    error (1, 0, "--next-task (bootstrap) is exclusive of --selftest, "
+                 "--status, --read-range and --serve");
+
+  /* Bootstrap mode: serve the disk through libmachdev and resume the
+     next task in the chain.  The device is deliberately NOT brought up
+     here: libpciaccess needs a device master whose open of "pci"
+     reaches the pci-arbiter, and the --device-master-port grub hands
+     us is the kernel's, which serves no "pci" device.  The bring-up
+     happens inside vblk_machdev_run, after machdev_trivfs_init has
+     replaced these ports from fsys_getpriv (the rumpdisk order).
+     Stdio is not on the console until machdev_trivfs_init reopens it,
+     so milestones before that point go through mach_print.  */
+  if (opt_next_task)
+    {
+      if (!vblk_machdev_run)
+        {
+          mach_print ("virtio-blk: bootstrap requires the static build "
+                      "(virtio-blk.static, linked with libmachdev)\n");
+          error (1, 0, "bootstrap requires the static build "
+                       "(virtio-blk.static, linked with libmachdev)");
+        }
+
+      mach_print ("virtio-blk: bootstrap mode\n");
+      _hurd_host_priv = opt_host_priv;
+      _hurd_device_master = opt_dev_master;
+      next_task = opt_next_task;
+
+      vblk_machdev_run (&vblk, next_task, opt_name, opt_device,
+                        argc, argv);
+      /* Never returns.  */
+    }
 
   if (opt_read_range)
     {
@@ -596,13 +666,30 @@ main (int argc, char **argv)
 
   if (opt_serve)
     {
-      /* Become the Mach device translator.  Bring-up failure is fatal
-         before trivfs_startup replies to the parent, so settrans
-         reports it instead of hanging on a dead node.  */
-      err = vblk_start_device (opt_device);
-      if (err)
-        error (4, err, "virtio-blk device not usable");
-      vblk_serve (&vblk, opt_name);
+      if (vblk_machdev_run)
+        /* Static build: the libmachdev translator (devnode pattern)
+           serves device_open on the node; vblk_serve's libports
+           scaffold is not linked here.  Bring-up happens inside,
+           after machdev_trivfs_init (bootstrap mode needs the
+           fsys_getpriv ports first; --serve just follows the same
+           order).  */
+        vblk_machdev_run (&vblk, MACH_PORT_NULL, opt_name, opt_device,
+                          argc, argv);
+      else
+        {
+          /* Become the Mach device translator.  Bring-up failure is
+             fatal before trivfs_startup replies to the parent, so
+             settrans reports it instead of hanging on a dead node.  */
+          err = vblk_start_device (opt_device);
+          if (err)
+            error (4, err, "virtio-blk device not usable");
+
+          if (vblk_serve)
+            vblk_serve (&vblk, opt_name);
+          else
+            error (1, 0, "--serve unavailable: no translator backend "
+                         "linked");
+        }
     }
 
   sa.sa_handler = quit_handler;

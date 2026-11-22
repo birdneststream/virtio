@@ -254,7 +254,7 @@ vblk_hurd_read_inband (struct vblk_hurd *h, int mode, recnum_t recnum,
 
 error_t
 vblk_hurd_write_inband (struct vblk_hurd *h, int mode, recnum_t recnum,
-                        io_buf_ptr_inband_t data, int bytes,
+                        const char *data, int bytes,
                         int *bytes_written)
 {
   (void) h;

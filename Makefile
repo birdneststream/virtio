@@ -147,10 +147,10 @@ vnetNotifyServer.c vnet-notify_S.h: vnet-notify.sdefsi
 # too.  All net objects include <bpf_impl.h> through virtio-net.h, from
 # the pinned tree's libbpf directory.
 vnetDeviceServer.o vnetNotifyServer.o virtio-net-serve.o: \
-    CFLAGS += -I. -I$(HURD_SRC)
+    override CFLAGS += -I. -I$(HURD_SRC)
 virtio-net.o virtio-net-dev.o virtio-net-buf.o virtio-net-hurd.o \
 virtio-net-serve.o vnetDeviceServer.o vnetNotifyServer.o: \
-    CFLAGS += -I$(HURD_SRC)/libbpf
+    override CFLAGS += -I$(HURD_SRC)/libbpf
 vnetDeviceServer.o vnetNotifyServer.o virtio-net-serve.o: \
     virtio-net-serve.h
 virtio-net-serve.o: vnet-device_S.h vnet-notify_S.h
@@ -183,9 +183,12 @@ queue.o: $(HURD_SRC)/libbpf/queue.c
 # libports/ports.h + libports/mig-decls.h (not installed in the prefix;
 # they live in the pinned Hurd source tree).  The _S.h headers carry the
 # same imports, so virtio-blk-serve.o needs the paths too.
+# These are correctness include paths, not tunable flags, so they are
+# marked override: a command-line CFLAGS (e.g. the toolchain's
+# `CFLAGS="$(CFLAGS)"' pass-through) must not drop them.
 deviceServer.o notifyServer.o virtio-blk-serve.o: virtio-blk-serve.h
 deviceServer.o notifyServer.o virtio-blk-serve.o virtio-serve.o: \
-    CFLAGS += -I. -I$(HURD_SRC)
+    override CFLAGS += -I. -I$(HURD_SRC)
 virtio-blk-serve.o: device_S.h notify_S.h
 virtio-serve.o: virtio-serve.h
 

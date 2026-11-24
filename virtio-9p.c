@@ -398,9 +398,9 @@ v9p_queue_setup (void)
   error_t err;
 
   err = virtio_queue_setup (&v9p_pci, &v9p_q, 0);
-  virtio_queue_set_event_idx (&v9p_q, v9p_event_idx);
   if (err)
     return err;
+  virtio_queue_set_event_idx (&v9p_q, v9p_event_idx);
 
   v9p_vring_phys = v9p_q.region_phys;
   return 0;

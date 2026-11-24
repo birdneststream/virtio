@@ -4,10 +4,11 @@
 /* virtio-9p device translator for GNU/Hurd.
 
    Boundary conventions: the legacy PCI interface (BAR0 in I/O space), one
-   split virtqueue, one outstanding PDU, and a byte-stream front end for the
-   unmodified 9pfs translator.  The transport is the generic legacy virtio
-   PCI core (virtio-pci.c, virtio-queue.c); this header keeps the 9p-specific
-   policy (device ID, mount tag, msize caps) and the adapter entry points.  */
+   split virtqueue carrying up to V9P_MAX_INFLIGHT requests at once, and a
+   byte-stream front end for the unmodified 9pfs translator.  The transport
+   is the generic legacy virtio PCI core (virtio-pci.c, virtio-queue.c); this
+   header keeps the 9p-specific policy (device ID, mount tag, msize caps,
+   request concurrency) and the adapter entry points.  */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -41,21 +42,16 @@
    interrupt, not the normal completion path.  */
 #define V9P_EXCHANGE_TIMEOUT 30
 
-/* The TX/RX DMA buffers of the single 9P exchange, allocated by
-   v9p_queue_setup and used by v9p_exchange.  */
-struct v9p_dma {
-  uint8_t *tx_buf;
-  uint8_t *rx_buf;
-  uint64_t tx_phys;
-  uint64_t rx_phys;
-};
+/* Requests on the device at once, each in its own pair of full-size DMA
+   buffers.  Slots are allocated as concurrency first needs them, so this
+   is a ceiling on DMA memory, not the steady cost.  */
+#define V9P_MAX_INFLIGHT 16
 
 extern struct virtio_pci_dev v9p_pci;
 extern struct virtio_queue v9p_q;
 /* True when the device and driver negotiated VIRTIO_RING_F_EVENT_IDX.  */
 extern int v9p_event_idx;
 extern struct virtio_irq v9p_irq;
-extern struct v9p_dma v9p_dma;
 extern char v9p_tag[V9P_MAX_TAG_LEN + 1];
 extern uint16_t v9p_tag_len;
 extern uint64_t v9p_vring_phys;
@@ -68,6 +64,19 @@ error_t v9p_irq_install (void);
 void v9p_irq_uninstall (void);
 
 /* virtio-9p-req.c */
+/* Post one request PDU and return without waiting for its reply.  Blocks
+   only while every request slot is in flight.  */
+error_t v9p_submit (const void *pdu, uint32_t pdu_len);
+/* Copy up to LEN bytes of the oldest queued reply, waiting for one when
+   none is queued and returning short as soon as any byte is available.  */
+error_t v9p_reply_next (void *buf, size_t len, size_t *nread);
+int v9p_reply_ready (void);
+/* Start the completion collector thread, after the queue and the IRQ are
+   up.  */
+error_t v9p_collect_start (void);
+/* Fail the transport: queued replies are still read, then ERR.  */
+void v9p_fail (error_t err);
+/* Synchronous request and reply, for the selftest only.  */
 error_t v9p_exchange (const void *pdu, uint32_t pdu_len,
                       void *reply, uint32_t reply_cap, uint32_t *reply_len);
 error_t v9p_selftest (const char *required_tag);

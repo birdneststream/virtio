@@ -11,8 +11,9 @@
    index instead of trusting the wakeup, the way virtio-9p always has.
 
    Descriptors come from a free list, so any number of chains may be in
-   flight; both current drivers keep one buffer per queue outstanding and
-   consume completions in order.  */
+   flight.  virtio-9p keeps many requests in flight and consumes their
+   completions as they arrive; a driver that posts one buffer at a time
+   consumes them in order.  */
 
 #include <stdint.h>
 #include <stddef.h>

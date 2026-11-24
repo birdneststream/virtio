@@ -325,9 +325,9 @@ trivfs_S_io_mod_owner (struct trivfs_protid *cred,
   return EINVAL;
 }
 
-/* 9P transport policy over the generic legacy core: the virtio-9p device ID,
-   the required mount-tag feature, and the per-queue TX/RX DMA buffers the
-   exchange posts.  */
+/* 9P transport policy over the generic legacy core: the virtio-9p device ID
+   and the required mount-tag feature.  The request buffers belong to the
+   slots in virtio-9p-req.c.  */
 
 struct virtio_pci_dev v9p_pci =
 {
@@ -337,7 +337,6 @@ struct virtio_pci_dev v9p_pci =
 struct virtio_queue v9p_q;
 int v9p_event_idx;
 struct virtio_irq v9p_irq;
-struct v9p_dma v9p_dma;
 char v9p_tag[V9P_MAX_TAG_LEN + 1];
 uint16_t v9p_tag_len;
 uint64_t v9p_vring_phys;
@@ -367,8 +366,8 @@ v9p_pci_init (void)
     }
   /* Writing guest_features = 0 would leave the mount tag undefined.
    * EVENT_IDX is accepted so the completion interrupt can be moderated:
-   * the exchange suppresses it for its spin window and arms the used
-   * event only when it must sleep.  */
+   * a thread draining the used ring suppresses it over its drain and
+   * arms the used event only when it must sleep.  */
   v9p_event_idx = (features & (1u << VIRTIO_RING_F_EVENT_IDX)) != 0;
   virtio_pci_set_guest_features (&v9p_pci, (1u << V9P_F_MOUNT_TAG)
                                  | (v9p_event_idx
@@ -403,19 +402,7 @@ v9p_queue_setup (void)
   if (err)
     return err;
 
-  err = virtio_dma_alloc (&v9p_pci, V9P_TX_BUF_SIZE,
-                          (void **) &v9p_dma.tx_buf, &v9p_dma.tx_phys);
-  if (err)
-    return err;
-  err = virtio_dma_alloc (&v9p_pci, V9P_RX_BUF_SIZE,
-                          (void **) &v9p_dma.rx_buf, &v9p_dma.rx_phys);
-  if (err)
-    return err;
-
   v9p_vring_phys = v9p_q.region_phys;
-  fprintf (stderr, "virtio-9p: queue 0 TX/RX 0x%llx/0x%llx\n",
-           (unsigned long long) v9p_dma.tx_phys,
-           (unsigned long long) v9p_dma.rx_phys);
   return 0;
 }
 
@@ -454,6 +441,12 @@ v9p_start_device (void)
   if (err)
     return err;
   err = v9p_ios_init ();
+  if (err)
+    {
+      v9p_irq_uninstall ();
+      return err;
+    }
+  err = v9p_collect_start ();
   if (err)
     {
       v9p_irq_uninstall ();

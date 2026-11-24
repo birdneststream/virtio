@@ -84,12 +84,25 @@ v9p_exchange (const void *pdu, uint32_t pdu_len,
   if (err)
     return err;
 
-  /* Under the emulated device the completion is usually already in the
-   * used ring when the kick's exit returns, so one opportunistic pop
-   * catches the common case without any spinning.  */
-  err = virtio_queue_try_pop_used (&v9p_q, &used);
-  if (err != EAGAIN)
-    goto got_reply;
+  /* Look for the reply with the used notification still suppressed, so
+   * the device cannot deliver an interrupt that races this loop.  The
+   * first pass is the opportunistic pop.  On the emulated device under
+   * KVM the completion does not land before the kick's exit returns, it
+   * comes some 75 to 130 us later, and the interrupt path to deliver it
+   * costs a VM exit, an irqhelp thread wake and a condvar handoff on
+   * top.  So keep looking, with the cheapest primitive that also takes
+   * the entry, until the bound runs out.  Past the bound the armed wait
+   * below is exactly as before.  */
+  {
+    unsigned spins;
+
+    for (spins = 0; spins < V9P_EXCHANGE_SPINS; spins++)
+      {
+        err = virtio_queue_try_pop_used (&v9p_q, &used);
+        if (err != EAGAIN)
+          goto got_reply;
+      }
+  }
 
   /* Not collected inline: arm the used event at the consumed position,
    * close the arm race, then sleep until the used index moves.  */

@@ -41,6 +41,26 @@
    interrupt, not the normal completion path.  */
 #define V9P_EXCHANGE_TIMEOUT 30
 
+/* Passes spent looking for the reply before arming the interrupt, with
+   the used notification still suppressed.  One pass is one queue lock
+   and one used index read, about 1.5 us in the guest.  Measured on the
+   bench guest against QEMU 11.1 under KVM: 1000 passes recovers none of
+   the gap, 5000 recovers most, 50000 recovers all of it, so the device
+   answers a small 9P request in 10 to 75 us there.  A slower device or a
+   loaded host falls through to the armed wait as before.  */
+#ifndef V9P_EXCHANGE_SPINS
+#define V9P_EXCHANGE_SPINS 50000
+#endif
+
+/* Upper bound on the pause passes spent looking for a completion before
+   the armed interrupt wait.  Sizing: the device answers a 9P request in
+   a few microseconds, a pause pass is some tens of nanoseconds, so this
+   covers the completion with a wide margin and costs under ten
+   microseconds when the device is slow.  */
+#ifndef V9P_EXCHANGE_SPINS
+#define V9P_EXCHANGE_SPINS 200
+#endif
+
 /* The TX/RX DMA buffers of the single 9P exchange, allocated by
    v9p_queue_setup and used by v9p_exchange.  */
 struct v9p_dma {
